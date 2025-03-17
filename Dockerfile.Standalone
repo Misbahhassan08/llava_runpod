@@ -1,0 +1,83 @@
+FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=on \
+    SHELL=/bin/bash
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# Upgrade apt packages and install required dependencies
+RUN apt update && \
+    apt upgrade -y && \
+    apt install -y \
+      python3-dev \
+      python3-pip \
+      python3.10-venv \
+      fonts-dejavu-core \
+      rsync \
+      git \
+      git-lfs \
+      jq \
+      moreutils \
+      aria2 \
+      wget \
+      curl \
+      libglib2.0-0 \
+      libsm6 \
+      libgl1 \
+      libxrender1 \
+      libxext6 \
+      ffmpeg \
+      libgoogle-perftools-dev \
+      procps && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get clean -y
+
+# Set working directory
+WORKDIR /workspace
+
+# Create venv
+RUN python3 -m venv /workspace/venv
+
+# Install Torch
+RUN source /workspace/venv/bin/activate && \
+    pip3 install --no-cache-dir torch==2.1.2 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 && \
+    deactivate
+
+# Install LLaVA
+RUN git clone https://github.com/haotian-liu/LLaVA.git llava && \
+    cd /workspace/llava && \
+    source /workspace/venv/bin/activate && \
+    pip3 install . && \
+    pip3 install ninja packaging wheel && \
+    pip3 install flash-attn --no-build-isolation && \
+    pip3 install transformers==4.37.2 && \
+    pip3 install protobuf && \
+    deactivate
+
+# Install the worker
+RUN cd /workspace && \
+    git clone https://github.com/ashleykleynhans/runpod-worker-llava.git && \
+    cd /workspace/runpod-worker-llava && \
+    cd src && \
+    source /workspace/venv/bin/activate && \
+    pip3 install -r requirements.txt && \
+    deactivate
+
+# Download the model
+ENV HF_HOME="/workspace"
+ENV MODEL="liuhaotian/llava-v1.6-mistral-7b"
+RUN source /workspace/venv/bin/activate && \
+    python3 /workspace/runpod-worker-llava/src/download_models.py && \
+    deactivate
+
+# Copy the Serverless handler
+COPY --chmod=755 src/rp_handler.py /workspace/runpod-worker-llava/src/rp_handler.py
+
+# Copy start script
+COPY --chmod=755 start_standalone.sh /start.sh
+
+# Start the container
+ENTRYPOINT /start.sh
